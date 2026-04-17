@@ -1,155 +1,157 @@
-// ==========================================================
-// CONFIGURAÇÃO INICIAL (Altere aqui o período de amostragem)
-// ==========================================================
-float Ts = 0.020; // Período em segundos (Ex: 0.020 = 50Hz, 0.010 = 100Hz)
-float DC = 48.0;  // Duty Cycle do degrau (%)
-
-// Definições de Pinos
-const uint8_t POT = A0;
-const uint8_t PWMPIN = 3;
-const uint8_t IN3 = 9;
-const uint8_t IN4 = 8;
-
-// Variáveis Globais de Controle
-volatile int leituraBruta = 0;
-volatile unsigned long contadorAmostras = 0;
-volatile bool novoDado = false;
-float angulo;
-
-// Constantes e variáveis do PID
-const float Kp = 3.44;
-const float Ki = 5.03;
-const float Kd = 0.589;
-const float DC_min = 38.0;
-const float DC_max = 70.0;
-
-float ref = -45.0; // Começa na posição inicial de repouso
-float erro = 0.0;
-float erro_ant = 0.0;
-float integral = 0.0;
-float derivada = 0.0;
-
-// Protótipo da função
-void configurarInterrupcao(float periodo);
-
-void setup() {
-  pinMode(POT, INPUT);
-  pinMode(PWMPIN, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
+/*
+  Controle PID de Pêndulo com PWM manual via interrupção (Timer1)
   
-  Serial.begin(115200);
-
-  analogWrite(PWMPIN, (0 * 255.0) / 100.0);
-
-  // Definição da rotação do motor
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
-
-  // --- 4. CONFIGURAÇÃO DINÂMICA DA INTERRUPÇÃO ---
-  configurarInterrupcao(Ts);
-}
-
-// Função que calcula e configura o Timer1 com base no Ts fornecido
-void configurarInterrupcao(float periodo) {
-  uint32_t valorOCR = (16000000.0 * periodo / 256.0) - 1;
-
-  if (valorOCR > 65535) valorOCR = 65535;
-  if (valorOCR < 1) valorOCR = 1;
-
-  noInterrupts();           
-  TCCR1A = 0;               
-  TCCR1B = 0;
-  TCNT1  = 0;               
+  Período do PWM: 2ms (500Hz)
+  Tempo de amostragem PID: 50ms (Ts = 0.05s)
+  Ganhos do aluno: Kp=0.0246, Ki=0.1515, Kd=0
   
-  OCR1A = (uint16_t)valorOCR; 
-  
-  TCCR1B |= (1 << WGM12);   
-  TCCR1B |= (1 << CS12);    
-  TIMSK1 |= (1 << OCIE1A);  
-  interrupts();             
-}
+  Funcionamento:
+  - Timer1 gera interrupção a cada 2ms → controla o pulso PWM manualmente
+  - O loop() calcula o PID a cada 50ms e atualiza a variável DC (razão cíclica)
+  - A ISR usa DC para definir quanto tempo o pino fica em HIGH dentro do período de 2ms
+*/
 
-// Rotina de Serviço de Interrupção (ISR)
-ISR(TIMER1_COMPA_vect) {
-  leituraBruta = analogRead(POT);
-  contadorAmostras++;
-  novoDado = true;
-}
+#include <TimerOne.h>  
 
-void loop() {
-  if (novoDado) {
-    // 1. Cópia segura das variáveis da interrupção (Atomic Read)
-    noInterrupts();
-    int copiaLeitura = leituraBruta;
-    unsigned long copiaContador = contadorAmostras;
-    novoDado = false; // Já avisa que consumiu o dado
-    interrupts();
+// ─── Pinos ────────────────────────────────────────────────────────────────────
+const int pinoPot   = A0;
+const int enablePin = 10;   // Pino PWM manual (saída digital)
+const int in1       = 9;
+const int in2       = 8;
 
-    // 2. Cálculo do ângulo com o dado seguro
-    angulo = (copiaLeitura * (90.0 / 344.0)) - 45.0;
-    
-    // 3. Tempo decorrido (Movido para cá para atualizar a referência antes do PID)
-    float tempoSegundos = copiaContador * Ts;
+// ─── Parâmetros PID ───────────────────────────────────────────────────────────
+float Kp = 0.0246;
+float Ki = 0.1515;
+float Kd = 0.0;
+float Ts = 0.05;            // Tempo de amostragem do PID: 50ms
 
-    // ==========================================================
-    // LÓGICA DE DEGRAU AUTOMÁTICO A CADA 10 SEGUNDOS
-    // Cria um ciclo de 4 estágios (40 segundos totais)
-    // ==========================================================
-    int estagio = (int)(tempoSegundos / 10.0) % 4; 
-    
-    switch(estagio) {
-      case 0:
-        ref = -45.0; // 0 a 10s (Retorna ao repouso)
-        break;
-      case 1:
-        ref = -30.0; // 10 a 20s (Primeiro degrau)
-        break;
-      case 2:
-        ref = -15.0; // 20 a 30s (Segundo degrau)
-        break;
-      case 3:
-        ref = -5.0;  // 30 a 40s (Terceiro degrau)
-        break;
-    }
+// ─── Limites de razão cíclica (%) ────────────────────────────────────────────
+float DC_min =  1.0;
+float DC_max = 48;
 
-    // 4. Cálculos base do PID
-    erro = ref - angulo;
-    derivada = (erro - erro_ant) / Ts;
-    
-    // Cálculo provisório do PID para checar saturação
-    float termo_proporcional = Kp * erro;
-    float termo_derivativo = Kd * derivada;
-    // Soma a integral com o valor atual do erro
-    float integral_provisoria = integral + (erro * Ts);
-    float termo_integral = Ki * integral_provisoria;
+// ─── Variáveis PID ────────────────────────────────────────────────────────────
+float erro      = 0.0;
+float erro_ant  = 0.0;
+float integral  = 0.0;
+float derivada  = 0.0;
+volatile float DC = 0.0;    // Razão cíclica atual (%) — compartilhada com a ISR
 
-    DC = termo_proporcional + termo_integral + termo_derivativo;
+// ─── Setpoint variável ────────────────────────────────────────────────────────
+float t        = 0.0;
+float setPoint = 5.0;
+float ajuste   = 0.019;
 
-    // 5. ANTI-WINDUP E SATURAÇÃO
-    if(DC > DC_max) {
-      DC = DC_max;
-    } 
-    else if(DC < DC_min) {
-      DC = DC_min;
-    } 
-    else {
-      integral = integral_provisoria;
-    }
+// ─── Variáveis do PWM manual (usadas na ISR) ─────────────────────────────────
+/*
+  Estratégia: o período é de 2ms = 2000µs.
+  A ISR é chamada a cada 2ms.
+  Dentro de cada chamada, calculamos o tempo em HIGH = DC/100 * 2000µs,
+  colocamos o pino em HIGH por esse tempo (delayMicroseconds) e depois LOW
+  pelo tempo restante — tudo dentro da ISR.
 
-    // 6. Atualiza o Hardware
-    analogWrite(PWMPIN, (DC * 255.0) / 100.0);
+  Isso representa fielmente o conceito de "escrever a razão cíclica no
+  período do PWM" sem depender do hardware interno do analogWrite().
+*/
+const unsigned long PERIODO_US = 2000;  // 2ms em microssegundos
 
-    // 7. Atualiza variáveis passadas
-    erro_ant = erro;
+void pwmISR() {
+  // Captura local de DC para evitar inconsistência durante a ISR
+  float dc_local = DC;
 
-    // 8. Envia dados via Serial
-    Serial.print(ref, 2);
-    Serial.print(",");
-    Serial.print(angulo, 2);
-    Serial.print(",");
-    Serial.print(DC, 2);
-    Serial.print(",");
-    Serial.println(tempoSegundos);
+  // Tempo em HIGH dentro do período de 2ms
+  unsigned long t_high = (unsigned long)(dc_local / 100.0 * PERIODO_US);
+
+  if (t_high == 0) {
+    digitalWrite(enablePin, LOW);
+    return;
   }
+  if (t_high >= PERIODO_US) {
+    digitalWrite(enablePin, HIGH);
+    return;
+  }
+
+  // Gera o pulso: HIGH por t_high µs, LOW pelo restante
+  digitalWrite(enablePin, HIGH);
+  delayMicroseconds(t_high);
+  digitalWrite(enablePin, LOW);
+  // O tempo LOW restante (PERIODO_US - t_high) é coberto até a próxima chamada
+}
+
+// ─── Setup ────────────────────────────────────────────────────────────────────
+void setup() {
+  pinMode(enablePin, OUTPUT);
+  pinMode(in1, OUTPUT);
+  pinMode(in2, OUTPUT);
+
+  digitalWrite(in1, HIGH);
+  digitalWrite(in2, LOW);
+
+  Serial.begin(9600);
+  Serial.println("DC(%),AnguloReal,Erro,SetPoint");
+
+  // Configura Timer1 para chamar pwmISR() a cada 2ms (2000µs)
+  Timer1.initialize(PERIODO_US);
+  Timer1.attachInterrupt(pwmISR);
+}
+
+// ─── Loop principal — roda a cada 50ms (PID) ─────────────────────────────────
+void loop() {
+  // --- Atualiza setpoint baseado no tempo ---
+  if (t <= 5.0) {
+    setPoint = -5.0;
+  } else if (t <= 10.0) {
+    setPoint = -20.0;
+  } else if (t <= 15.0) {
+    setPoint = -40.0;
+  } else {
+    setPoint = 0.0;
+  }
+
+  // --- Leitura do ângulo ---
+  int valorPot    = analogRead(pinoPot);
+  float anguloReal = (valorPot * (90.0 / 344.0)) - 45.0;
+
+  // --- Cálculo do PID ---
+  erro = setPoint - anguloReal;
+
+  // Termo integral com anti-windup
+  integral += erro * Ts;
+  if (integral >  DC_max / Ki) integral =  DC_max / Ki;
+  if (integral <  DC_min / Ki) integral =  DC_min / Ki;
+
+  // Termo derivativo
+  derivada = (erro - erro_ant) / Ts;
+
+  // Nova razão cíclica calculada pelo PID
+  float DC_novo = Kp * erro + Ki * integral + Kd * derivada;
+
+  // Saturação
+  if (DC_novo > DC_max) DC_novo = DC_max;
+  if (DC_novo < DC_min) DC_novo = DC_min;
+
+  // Proteção de segurança — ângulo excessivo
+  if (anguloReal > 60.0) {
+    DC_novo  = 0.0;
+    integral = 20.0;
+  }
+
+  // Atualiza DC de forma atômica (interrupção pode ler DC a qualquer momento)
+  noInterrupts();
+  DC = DC_novo;   // ← A ISR usará este valor no próximo período de 2ms
+  interrupts();
+
+  // --- Serial ---
+  Serial.print(DC, 2);
+  Serial.print(",");
+  Serial.print(anguloReal, 2);
+  Serial.print(",");
+  Serial.print(erro, 2);
+  Serial.print(",");
+  Serial.println(setPoint, 2);
+
+  // --- Atualiza estado ---
+  erro_ant = erro;
+  t += Ts;
+
+  delay((unsigned long)(Ts * 1000));  // Aguarda próxima amostragem (50ms)
 }
