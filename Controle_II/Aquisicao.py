@@ -1,11 +1,12 @@
 import serial
 import serial.tools.list_ports
 import csv
+import os
 import time
 from datetime import datetime
 
 BAUD = 9600
-ARQUIVO = "amostras_pendulo.csv"
+ARQUIVO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "amostras_pendulo.csv")
 
 # ---------- FUNÇÃO PARA ENCONTRAR A PORTA ----------
 def encontrar_porta():
@@ -21,7 +22,7 @@ def encontrar_porta():
     return portas[1].device  # pega a primeira automaticamente
 
 
-PORTA = encontrar_porta() # -------< Coloque aqui a porta que o ARDUINO IDE mostrar
+PORTA = encontrar_porta()
 
 if PORTA is None:
     exit()
@@ -38,7 +39,7 @@ print(f"Conectado em {PORTA}. Aguardando dados...")
 
 # ---------- CONTROLE DE VARIAÇÃO ----------
 ultimo_angulo = None
-ultima_velocidade = None
+ultimo_DC = None
 TOL = 0.01  # tolerância para evitar ruído
 
 # ---------- ABRE CSV ----------
@@ -46,7 +47,7 @@ with open(ARQUIVO, "w", newline="", buffering=1) as f:
     writer = csv.writer(f)
 
     # Cabeçalho fixo
-    writer.writerow(["timestamp", "tempo", "angulo", "velocidade"])
+    writer.writerow(["timestamp", "DC", "angulo", "erro", "tempo", "setPoint"])
 
     try:
         while True:
@@ -57,30 +58,31 @@ with open(ARQUIVO, "w", newline="", buffering=1) as f:
             print(linha)
 
             dados = linha.split(",")
-
-            # Espera: tempo,angulo,velocidade
-            if len(dados) < 3:
+            
+            # Espera: DC,angulo,erro,tempo,setPoint
+            if len(dados) < 5:
                 continue
 
             try:
-                tempo = float(dados[0])
+                DC = float(dados[0])
                 angulo = float(dados[1])
-                velocidade = float(dados[2])
+                erro = float(dados[2])
+                tempo = float(dados[3])
+                setPoint = float(dados[4])
             except ValueError:
                 continue  # ignora linha inválida
 
             # Salva só se houver mudança relevante
-            if (ultimo_angulo is None or 
-                abs(angulo - ultimo_angulo) > TOL or 
-                abs(velocidade - ultima_velocidade) > TOL):
+            if (ultimo_angulo is None or
+                abs(angulo - ultimo_angulo) > TOL or
+                abs(DC - ultimo_DC) > TOL):
 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
-                writer.writerow([timestamp, tempo, angulo, velocidade])
+                writer.writerow([timestamp, DC, angulo, erro, tempo, setPoint])
 
                 ultimo_angulo = angulo
-                ultima_velocidade = velocidade
-
+                ultimo_DC = DC
     except KeyboardInterrupt:
         print(f"\nCaptura encerrada. Arquivo salvo: {ARQUIVO}")
 
