@@ -100,10 +100,14 @@ void loop() {
   if (t <= 50.0) {
     setPoint = -40.0;
   } else if (t <= 100.0) {
-    setPoint = -30.0;
+    setPoint = -35.0;
   } else if (t <= 150.0) {
-    setPoint = -20.0;
+    setPoint = -30.0;
   } else if (t <= 200.0) {
+    setPoint = -25.0;
+  }else if (t <= 300.0) {
+    setPoint = -20.0;
+  }  else if (t <= 400.0) {
     setPoint = -30.0;
   } else {
     t=0;
