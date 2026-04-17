@@ -97,14 +97,16 @@ void setup() {
 // ─── Loop principal — roda a cada 50ms (PID) ─────────────────────────────────
 void loop() {
   // --- Atualiza setpoint baseado no tempo ---
-  if (t <= 5.0) {
-    setPoint = -5.0;
-  } else if (t <= 10.0) {
-    setPoint = -20.0;
-  } else if (t <= 15.0) {
+  if (t <= 50.0) {
     setPoint = -40.0;
+  } else if (t <= 100.0) {
+    setPoint = -30.0;
+  } else if (t <= 150.0) {
+    setPoint = -20.0;
+  } else if (t <= 200.0) {
+    setPoint = -30.0;
   } else {
-    setPoint = 0.0;
+    t=0;
   }
 
   // --- Leitura do ângulo ---
@@ -146,6 +148,8 @@ void loop() {
   Serial.print(anguloReal, 2);
   Serial.print(",");
   Serial.print(erro, 2);
+  Serial.print(",");
+  Serial.print(t, 2);
   Serial.print(",");
   Serial.println(setPoint, 2);
 
