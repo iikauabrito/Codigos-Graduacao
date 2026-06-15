@@ -16,8 +16,6 @@
 
   Saída do Fuzzy:
   - deltaDC_Fuzzy, uma correção pequena no duty cycle
-
-  Versão sem biblioteca Fuzzy.
 */
 
 #include <TimerOne.h>
