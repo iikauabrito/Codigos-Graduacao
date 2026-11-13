@@ -1,3 +1,4 @@
+//PARA UTILIZAÇÃO DO AQUISICAO.PY COM 5 POSICOES
 float pinoPot = A0;      // Pino do potenciômetro
 int enablePin = 10;      // Pino PWM (ENABLE da ponte H)
 int in1 = 9;             // Direção 1
