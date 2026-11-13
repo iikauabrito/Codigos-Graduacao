@@ -34,7 +34,7 @@ void loop() {
   Serial.print(",");
   Serial.print(tempo, 3);
   Serial.print(",");
-  Serial.println(setPoint, 2);
+  Serial.println(0, 2);
 
   delay(Ts * 1000);
 }
